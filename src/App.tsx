@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { CanvasElement, CanvasPage, CanvasProject } from './types/canvas';
 import { TEMPLATES_LIBRARY, TemplateDefinition } from './data/templates';
 import { TopBar } from './components/TopBar';
@@ -49,9 +49,16 @@ export default function App() {
   const selectedElement =
     currentPage?.elements.find((el) => el.id === selectedElementId) || null;
 
+  // Maintain a ref to the latest project state for clean async/event listener access
+  const projectRef = useRef<CanvasProject>(project);
+  useEffect(() => {
+    projectRef.current = project;
+  }, [project]);
+
   // Push current state to undo history before mutations
-  const pushToHistory = useCallback((currentProj: CanvasProject) => {
-    setUndoStack((prev) => [...prev.slice(-30), JSON.parse(JSON.stringify(currentProj))]);
+  const pushToHistory = useCallback((currentProj?: CanvasProject) => {
+    const target = currentProj || projectRef.current;
+    setUndoStack((prev) => [...prev.slice(-50), JSON.parse(JSON.stringify(target))]);
     setRedoStack([]);
   }, []);
 
@@ -69,21 +76,29 @@ export default function App() {
   }, [handleFitToScreen]);
 
   // Undo / Redo handlers
-  const handleUndo = () => {
-    if (undoStack.length === 0) return;
-    const previous = undoStack[undoStack.length - 1];
-    setUndoStack((prev) => prev.slice(0, -1));
-    setRedoStack((prev) => [...prev, JSON.parse(JSON.stringify(project))]);
-    setProject(previous);
-  };
+  const handleUndo = useCallback(() => {
+    setUndoStack((prevUndo) => {
+      if (prevUndo.length === 0) return prevUndo;
+      const previous = prevUndo[prevUndo.length - 1];
+      const nextUndo = prevUndo.slice(0, -1);
 
-  const handleRedo = () => {
-    if (redoStack.length === 0) return;
-    const next = redoStack[redoStack.length - 1];
-    setRedoStack((prev) => prev.slice(0, -1));
-    setUndoStack((prev) => [...prev, JSON.parse(JSON.stringify(project))]);
-    setProject(next);
-  };
+      setRedoStack((prevRedo) => [...prevRedo, JSON.parse(JSON.stringify(projectRef.current))]);
+      setProject(previous);
+      return nextUndo;
+    });
+  }, []);
+
+  const handleRedo = useCallback(() => {
+    setRedoStack((prevRedo) => {
+      if (prevRedo.length === 0) return prevRedo;
+      const next = prevRedo[prevRedo.length - 1];
+      const nextRedo = prevRedo.slice(0, -1);
+
+      setUndoStack((prevUndo) => [...prevUndo, JSON.parse(JSON.stringify(projectRef.current))]);
+      setProject(next);
+      return nextRedo;
+    });
+  }, []);
 
   // Keyboard shortcut listener for Ctrl+Z and Ctrl+Y
   useEffect(() => {
@@ -103,7 +118,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  });
+  }, [handleUndo, handleRedo]);
 
   // Project Title
   const handleUpdateTitle = (newTitle: string) => {
@@ -153,7 +168,10 @@ export default function App() {
   };
 
   // Update Element
-  const handleUpdateElement = (id: string, updates: Partial<CanvasElement>) => {
+  const handleUpdateElement = (id: string, updates: Partial<CanvasElement>, saveHistory = false) => {
+    if (saveHistory) {
+      pushToHistory();
+    }
     setProject((prev) => {
       const updatedPages = [...prev.pages];
       const p = { ...updatedPages[prev.currentPageIndex] };
@@ -463,7 +481,7 @@ export default function App() {
             element={selectedElement}
             canvasWidth={project.width}
             canvasHeight={project.height}
-            onUpdate={(updates) => selectedElement && handleUpdateElement(selectedElement.id, updates)}
+            onUpdate={(updates) => selectedElement && handleUpdateElement(selectedElement.id, updates, true)}
             onDuplicate={() => selectedElement && handleDuplicateElement(selectedElement.id)}
             onDelete={() => selectedElement && handleDeleteElement(selectedElement.id)}
             onReorder={(dir) => selectedElement && handleReorderElement(selectedElement.id, dir)}
@@ -489,6 +507,7 @@ export default function App() {
             onFitToScreen={handleFitToScreen}
             showGrid={showGrid}
             showPrintGuides={showPrintGuides}
+            onPushHistory={pushToHistory}
             onToggleSidebar={() => setIsSidebarOpenOnMobile(!isSidebarOpenOnMobile)}
             isSidebarOpenOnMobile={isSidebarOpenOnMobile}
           />

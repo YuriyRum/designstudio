@@ -35,6 +35,7 @@ interface CanvasWorkspaceProps {
   onFitToScreen: () => void;
   showGrid: boolean;
   showPrintGuides?: boolean;
+  onPushHistory?: () => void;
   onToggleSidebar?: () => void;
   isSidebarOpenOnMobile?: boolean;
 }
@@ -57,6 +58,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
   onFitToScreen,
   showGrid,
   showPrintGuides = false,
+  onPushHistory,
   onToggleSidebar,
   isSidebarOpenOnMobile,
 }) => {
@@ -221,6 +223,8 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
 
     if (el.locked) return;
 
+    onPushHistory?.();
+
     const target = e.currentTarget as HTMLElement;
     try {
       target.setPointerCapture(e.pointerId);
@@ -248,6 +252,8 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
   const handlePointerDownHandle = (e: React.PointerEvent, handle: HandleType) => {
     if (e.button !== 0 || !selectedElement || selectedElement.locked) return;
     e.stopPropagation();
+
+    onPushHistory?.();
 
     const target = e.currentTarget as HTMLElement;
     try {

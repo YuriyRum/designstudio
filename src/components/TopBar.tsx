@@ -137,23 +137,26 @@ export const TopBar: React.FC<TopBarProps> = ({
 
       {/* Zone 2: Navigation & Canvas Tools */}
       <div className="flex items-center gap-2">
-        {/* Undo / Redo */}
-        <div className="flex items-center border border-neutral-200 dark:border-neutral-800 rounded-lg p-0.5 bg-neutral-50 dark:bg-neutral-900">
+        {/* Step Back (Undo) / Step Forward (Redo) */}
+        <div className="flex items-center border border-neutral-200 dark:border-neutral-800 rounded-xl p-0.5 bg-neutral-50 dark:bg-neutral-900">
           <button
             onClick={onUndo}
             disabled={!canUndo}
-            title="Undo (Ctrl+Z)"
-            className="p-1.5 text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100 disabled:opacity-30 rounded-md hover:bg-white dark:hover:bg-neutral-800 transition-colors cursor-pointer"
+            title="Step Back (Undo - Ctrl+Z)"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-neutral-700 dark:text-neutral-300 hover:text-indigo-600 dark:hover:text-indigo-400 disabled:opacity-30 disabled:hover:text-neutral-700 rounded-lg hover:bg-white dark:hover:bg-neutral-800 transition-colors cursor-pointer font-semibold text-xs min-h-[36px]"
           >
-            <Undo2 className="w-4 h-4" />
+            <Undo2 className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+            <span className="hidden md:inline">Step Back</span>
           </button>
+          <div className="h-4 w-px bg-neutral-200 dark:bg-neutral-800 mx-0.5" />
           <button
             onClick={onRedo}
             disabled={!canRedo}
-            title="Redo (Ctrl+Y)"
-            className="p-1.5 text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100 disabled:opacity-30 rounded-md hover:bg-white dark:hover:bg-neutral-800 transition-colors cursor-pointer"
+            title="Step Forward (Redo - Ctrl+Y)"
+            className="flex items-center gap-1.5 px-2.5 py-1.5 text-neutral-700 dark:text-neutral-300 hover:text-indigo-600 dark:hover:text-indigo-400 disabled:opacity-30 disabled:hover:text-neutral-700 rounded-lg hover:bg-white dark:hover:bg-neutral-800 transition-colors cursor-pointer font-semibold text-xs min-h-[36px]"
           >
-            <Redo2 className="w-4 h-4" />
+            <span className="hidden md:inline">Step Forward</span>
+            <Redo2 className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
           </button>
         </div>
 

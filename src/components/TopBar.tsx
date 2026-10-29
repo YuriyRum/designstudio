@@ -1,14 +1,14 @@
-import React, { useState } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   Undo2,
   Redo2,
   Download,
-  Sparkles,
   Maximize2,
   ZoomIn,
   ZoomOut,
   Maximize,
   Grid,
+  FolderUp,
 } from 'lucide-react';
 import { CanvasProject } from '../types/canvas';
 
@@ -24,9 +24,11 @@ interface TopBarProps {
   onFitToScreen: () => void;
   showGrid: boolean;
   onToggleGrid: () => void;
+  showPrintGuides?: boolean;
+  onTogglePrintGuides?: () => void;
   onOpenResizeModal: () => void;
   onOpenExportModal: () => void;
-  onOpenMagicModal: () => void;
+  onImportFile?: (file: File) => void;
 }
 
 export const TopBar: React.FC<TopBarProps> = ({
@@ -41,12 +43,15 @@ export const TopBar: React.FC<TopBarProps> = ({
   onFitToScreen,
   showGrid,
   onToggleGrid,
+  showPrintGuides = false,
+  onTogglePrintGuides,
   onOpenResizeModal,
   onOpenExportModal,
-  onOpenMagicModal,
+  onImportFile,
 }) => {
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleInput, setTitleInput] = useState(project.title);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleTitleSubmit = () => {
     setIsEditingTitle(false);
@@ -57,10 +62,28 @@ export const TopBar: React.FC<TopBarProps> = ({
     }
   };
 
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file && onImportFile) {
+      onImportFile(file);
+    }
+    // Reset file input so user can re-import same file if needed
+    if (e.target) e.target.value = '';
+  };
+
   const zoomPercent = Math.round(zoom * 100);
 
   return (
     <header className="h-14 bg-white dark:bg-neutral-900 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between px-4 z-40 gap-4 shrink-0 select-none">
+      {/* Hidden File Input for Project Upload */}
+      <input
+        type="file"
+        ref={fileInputRef}
+        onChange={handleFileChange}
+        accept=".json,.canvascraft"
+        className="hidden"
+      />
+
       {/* Zone 1: Brand & Project Name */}
       <div className="flex items-center gap-4 shrink-0">
         <a
@@ -120,7 +143,7 @@ export const TopBar: React.FC<TopBarProps> = ({
             onClick={onUndo}
             disabled={!canUndo}
             title="Undo (Ctrl+Z)"
-            className="p-1.5 text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100 disabled:opacity-30 rounded-md hover:bg-white dark:hover:bg-neutral-800 transition-colors"
+            className="p-1.5 text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100 disabled:opacity-30 rounded-md hover:bg-white dark:hover:bg-neutral-800 transition-colors cursor-pointer"
           >
             <Undo2 className="w-4 h-4" />
           </button>
@@ -128,7 +151,7 @@ export const TopBar: React.FC<TopBarProps> = ({
             onClick={onRedo}
             disabled={!canRedo}
             title="Redo (Ctrl+Y)"
-            className="p-1.5 text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100 disabled:opacity-30 rounded-md hover:bg-white dark:hover:bg-neutral-800 transition-colors"
+            className="p-1.5 text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100 disabled:opacity-30 rounded-md hover:bg-white dark:hover:bg-neutral-800 transition-colors cursor-pointer"
           >
             <Redo2 className="w-4 h-4" />
           </button>
@@ -138,7 +161,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         <button
           onClick={onToggleGrid}
           title={showGrid ? 'Hide Alignment Grid' : 'Show Alignment Grid'}
-          className={`p-1.5 rounded-lg border transition-colors ${
+          className={`p-1.5 rounded-lg border transition-colors cursor-pointer ${
             showGrid
               ? 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 border-indigo-200 dark:border-indigo-800'
               : 'border-neutral-200 dark:border-neutral-800 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800'
@@ -147,12 +170,27 @@ export const TopBar: React.FC<TopBarProps> = ({
           <Grid className="w-4 h-4" />
         </button>
 
+        {/* Print & Fold Guides Toggle */}
+        {onTogglePrintGuides && (
+          <button
+            onClick={onTogglePrintGuides}
+            title={showPrintGuides ? 'Hide Print & Fold Guides' : 'Show Print & Fold Guides (Brochure & Postcards)'}
+            className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-xs font-medium transition-colors cursor-pointer ${
+              showPrintGuides
+                ? 'bg-amber-50 dark:bg-amber-950/50 text-amber-600 dark:text-amber-400 border-amber-300 dark:border-amber-800 font-semibold'
+                : 'border-neutral-200 dark:border-neutral-800 text-neutral-600 dark:text-neutral-400 hover:bg-neutral-100 dark:hover:bg-neutral-800'
+            }`}
+          >
+            <span className="text-[11px]">Fold Guides</span>
+          </button>
+        )}
+
         {/* Zoom Controls */}
         <div className="flex items-center border border-neutral-200 dark:border-neutral-800 rounded-lg p-0.5 bg-neutral-50 dark:bg-neutral-900 text-xs">
           <button
             onClick={() => onZoomChange(Math.max(0.15, zoom - 0.1))}
             title="Zoom Out"
-            className="p-1.5 text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100 rounded-md hover:bg-white dark:hover:bg-neutral-800 transition-colors"
+            className="p-1.5 text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100 rounded-md hover:bg-white dark:hover:bg-neutral-800 transition-colors cursor-pointer"
           >
             <ZoomOut className="w-3.5 h-3.5" />
           </button>
@@ -164,7 +202,7 @@ export const TopBar: React.FC<TopBarProps> = ({
           <button
             onClick={() => onZoomChange(Math.min(3.0, zoom + 0.1))}
             title="Zoom In"
-            className="p-1.5 text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100 rounded-md hover:bg-white dark:hover:bg-neutral-800 transition-colors"
+            className="p-1.5 text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-100 rounded-md hover:bg-white dark:hover:bg-neutral-800 transition-colors cursor-pointer"
           >
             <ZoomIn className="w-3.5 h-3.5" />
           </button>
@@ -172,7 +210,7 @@ export const TopBar: React.FC<TopBarProps> = ({
           <button
             onClick={onFitToScreen}
             title="Fit Canvas to Screen"
-            className="p-1.5 text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-200 rounded-md hover:bg-white dark:hover:bg-neutral-800 transition-colors ml-0.5 border-l border-neutral-200 dark:border-neutral-800"
+            className="p-1.5 text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-200 rounded-md hover:bg-white dark:hover:bg-neutral-800 transition-colors ml-0.5 border-l border-neutral-200 dark:border-neutral-800 cursor-pointer"
           >
             <Maximize className="w-3.5 h-3.5" />
           </button>
@@ -180,20 +218,23 @@ export const TopBar: React.FC<TopBarProps> = ({
       </div>
 
       {/* Zone 3: Primary Actions */}
-      <div className="flex items-center gap-2.5 shrink-0">
-        {/* Magic Studio AI */}
-        <button
-          onClick={onOpenMagicModal}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/50 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 rounded-xl border border-indigo-200 dark:border-indigo-800/80 transition-colors whitespace-nowrap shrink-0 shadow-2xs"
-        >
-          <Sparkles className="w-3.5 h-3.5 text-indigo-500 animate-pulse" />
-          <span>Magic Studio</span>
-        </button>
+      <div className="flex items-center gap-2 shrink-0">
+        {/* Open Saved Project */}
+        {onImportFile && (
+          <button
+            onClick={() => fileInputRef.current?.click()}
+            title="Open saved project file (.json / .canvascraft)"
+            className="flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-neutral-700 dark:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-xl border border-neutral-200 dark:border-neutral-800 transition-colors cursor-pointer whitespace-nowrap"
+          >
+            <FolderUp className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+            <span className="hidden sm:inline">Open Design</span>
+          </button>
+        )}
 
         {/* Download / Export */}
         <button
           onClick={onOpenExportModal}
-          className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-500 rounded-xl shadow-xs shadow-indigo-600/20 transition-colors whitespace-nowrap shrink-0"
+          className="flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-indigo-600 hover:bg-indigo-500 rounded-xl shadow-xs shadow-indigo-600/20 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
         >
           <Download className="w-3.5 h-3.5" />
           <span>Export</span>

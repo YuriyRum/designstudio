@@ -7,8 +7,8 @@ import { ElementToolbar } from './components/ElementToolbar';
 import { CanvasWorkspace } from './components/CanvasWorkspace';
 import { ResizeCanvasModal } from './components/ResizeCanvasModal';
 import { ExportModal } from './components/ExportModal';
-import { MagicStudioModal } from './components/MagicStudioModal';
 import { fitCanvasToViewport } from './utils/geometry';
+import { importProjectFromFile } from './utils/exportUtils';
 
 export default function App() {
   // Initialize project with the first featured template
@@ -34,15 +34,16 @@ export default function App() {
   const [undoStack, setUndoStack] = useState<CanvasProject[]>([]);
   const [redoStack, setRedoStack] = useState<CanvasProject[]>([]);
 
-  // Selection & Viewport
+  // Selection, Viewport & Mobile UI
   const [selectedElementId, setSelectedElementId] = useState<string | null>(null);
   const [zoom, setZoom] = useState<number>(0.65);
   const [showGrid, setShowGrid] = useState<boolean>(false);
+  const [showPrintGuides, setShowPrintGuides] = useState<boolean>(true);
+  const [isSidebarOpenOnMobile, setIsSidebarOpenOnMobile] = useState<boolean>(false);
 
   // Modals
   const [isResizeOpen, setIsResizeOpen] = useState(false);
   const [isExportOpen, setIsExportOpen] = useState(false);
-  const [isMagicOpen, setIsMagicOpen] = useState(false);
 
   const currentPage = project.pages[project.currentPageIndex] || project.pages[0];
   const selectedElement =
@@ -56,9 +57,10 @@ export default function App() {
 
   // Fit to screen on initial mount
   const handleFitToScreen = useCallback(() => {
-    const availW = window.innerWidth - 336; // minus sidebar width (84px * 4 = 336px)
-    const availH = window.innerHeight - 56 - 44 - 44; // minus topbar, toolbar, and footer
-    const newZoom = fitCanvasToViewport(project.width, project.height, availW, availH, 100);
+    const isMobile = window.innerWidth < 1024;
+    const availW = isMobile ? window.innerWidth - 32 : window.innerWidth - 336;
+    const availH = window.innerHeight - 56 - 48 - 48;
+    const newZoom = fitCanvasToViewport(project.width, project.height, availW, availH, 80);
     setZoom(newZoom);
   }, [project.width, project.height]);
 
@@ -109,14 +111,17 @@ export default function App() {
   };
 
   // Add Element
-  const handleAddElement = (elementData: Partial<CanvasElement>) => {
+  const handleAddElement = (
+    elementData: Partial<CanvasElement>,
+    dropX?: number,
+    dropY?: number
+  ) => {
     pushToHistory(project);
 
-    // Compute center position
     const w = elementData.width || 200;
     const h = elementData.height || 100;
-    const x = Math.round((project.width - w) / 2);
-    const y = Math.round((project.height - h) / 2);
+    const x = dropX !== undefined ? dropX : Math.round((project.width - w) / 2);
+    const y = dropY !== undefined ? dropY : Math.round((project.height - h) / 2);
 
     const maxZ = currentPage.elements.reduce((max, el) => Math.max(max, el.zIndex), 0);
 
@@ -238,7 +243,7 @@ export default function App() {
 
   // Align Element on Canvas
   const handleAlignElement = (
-    type: 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom'
+    type: 'left' | 'center' | 'right' | 'top' | 'middle' | 'bottom' | 'center-both' | 'margin-inset'
   ) => {
     if (!selectedElement) return;
     pushToHistory(project);
@@ -252,6 +257,14 @@ export default function App() {
     if (type === 'top') newY = 0;
     if (type === 'middle') newY = Math.round((project.height - selectedElement.height) / 2);
     if (type === 'bottom') newY = project.height - selectedElement.height;
+    if (type === 'center-both') {
+      newX = Math.round((project.width - selectedElement.width) / 2);
+      newY = Math.round((project.height - selectedElement.height) / 2);
+    }
+    if (type === 'margin-inset') {
+      newX = 28;
+      newY = 28;
+    }
 
     handleUpdateElement(selectedElement.id, { x: newX, y: newY });
   };
@@ -287,10 +300,8 @@ export default function App() {
       const updatedPages = [...prev.pages];
       const p = { ...updatedPages[prev.currentPageIndex] };
 
-      // Set page background to softest or dominant color
       p.backgroundColor = colors[colors.length - 1];
 
-      // Update elements colors with palette
       p.elements = p.elements.map((el, i) => {
         const c = colors[i % (colors.length - 1)];
         if (el.type === 'shape') {
@@ -378,8 +389,35 @@ export default function App() {
     setSelectedElementId(null);
   };
 
+  // Import / Upload Saved Project File (.json)
+  const handleImportFile = async (file: File) => {
+    try {
+      const imported = await importProjectFromFile(file);
+      pushToHistory(project);
+      setProject({
+        id: imported.id || `proj-${Date.now()}`,
+        title: imported.title || file.name.replace(/\.[^/.]+$/, ''),
+        width: imported.width || 1080,
+        height: imported.height || 1080,
+        unit: imported.unit || 'px',
+        currentPageIndex: 0,
+        pages: imported.pages.map((pg, i) => ({
+          id: pg.id || `page-${i + 1}`,
+          name: pg.name || `Page ${i + 1}`,
+          backgroundColor: pg.backgroundColor || '#FFFFFF',
+          backgroundImage: pg.backgroundImage,
+          elements: Array.isArray(pg.elements) ? pg.elements : [],
+        })),
+      });
+      setSelectedElementId(null);
+      setTimeout(() => handleFitToScreen(), 100);
+    } catch (err: any) {
+      alert(err.message || 'Failed to open project file. Please check file format.');
+    }
+  };
+
   return (
-    <div className="flex flex-col h-screen w-screen overflow-hidden bg-white dark:bg-neutral-950 text-neutral-900 dark:text-neutral-100 font-sans">
+    <div className="flex flex-col h-screen w-screen overflow-hidden bg-white dark:bg-neutral-950 text-neutral-900 dark:text-neutral-100 font-sans touch-none">
       {/* 1. Universal Top Navigation Bar */}
       <TopBar
         project={project}
@@ -393,13 +431,15 @@ export default function App() {
         onFitToScreen={handleFitToScreen}
         showGrid={showGrid}
         onToggleGrid={() => setShowGrid(!showGrid)}
+        showPrintGuides={showPrintGuides}
+        onTogglePrintGuides={() => setShowPrintGuides(!showPrintGuides)}
         onOpenResizeModal={() => setIsResizeOpen(true)}
         onOpenExportModal={() => setIsExportOpen(true)}
-        onOpenMagicModal={() => setIsMagicOpen(true)}
+        onImportFile={handleImportFile}
       />
 
       {/* 2. Main Studio Workspace Layout */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden relative">
         {/* Left Sidebar Dock with Design Library & Tools */}
         <Sidebar
           onAddElement={handleAddElement}
@@ -410,8 +450,10 @@ export default function App() {
           onUpdateElement={handleUpdateElement}
           onDeleteElement={handleDeleteElement}
           onReorderElement={(id, dir) => handleReorderElement(id, dir)}
-          onOpenMagicModal={() => setIsMagicOpen(true)}
           onApplyPalette={handleApplyPalette}
+          isOpenOnMobile={isSidebarOpenOnMobile}
+          onCloseMobile={() => setIsSidebarOpenOnMobile(false)}
+          onImportFile={handleImportFile}
         />
 
         {/* Center Canvas Area with Contextual Toolbar */}
@@ -446,6 +488,9 @@ export default function App() {
             onZoomChange={setZoom}
             onFitToScreen={handleFitToScreen}
             showGrid={showGrid}
+            showPrintGuides={showPrintGuides}
+            onToggleSidebar={() => setIsSidebarOpenOnMobile(!isSidebarOpenOnMobile)}
+            isSidebarOpenOnMobile={isSidebarOpenOnMobile}
           />
         </div>
       </div>
@@ -463,13 +508,6 @@ export default function App() {
         isOpen={isExportOpen}
         onClose={() => setIsExportOpen(false)}
         project={project}
-      />
-
-      <MagicStudioModal
-        isOpen={isMagicOpen}
-        onClose={() => setIsMagicOpen(false)}
-        onAddTextElement={handleAddElement}
-        onApplyPalette={handleApplyPalette}
       />
     </div>
   );

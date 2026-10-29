@@ -1,7 +1,6 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
 import QRCode from 'qrcode';
 import {
-  Plus,
   Copy,
   Trash2,
   ChevronLeft,
@@ -9,8 +8,13 @@ import {
   Maximize,
   RotateCw,
   Sparkles,
+  Plus,
+  Lock,
+  Unlock,
+  MoveVertical,
+  SlidersHorizontal,
 } from 'lucide-react';
-import { CanvasElement, CanvasPage, CanvasProject, GuideLine, ShapeType } from '../types/canvas';
+import { CanvasElement, CanvasPage, CanvasProject, GuideLine } from '../types/canvas';
 import { calculateSnapping, HandleType } from '../utils/geometry';
 
 interface CanvasWorkspaceProps {
@@ -19,7 +23,7 @@ interface CanvasWorkspaceProps {
   selectedElementId: string | null;
   onSelectElement: (id: string | null) => void;
   onUpdateElement: (id: string, updates: Partial<CanvasElement>) => void;
-  onAddElement: (element: Partial<CanvasElement>) => void;
+  onAddElement: (element: Partial<CanvasElement>, dropX?: number, dropY?: number) => void;
   onDeleteElement: (id: string) => void;
   onDuplicateElement: (id: string) => void;
   onSelectPage: (index: number) => void;
@@ -30,6 +34,9 @@ interface CanvasWorkspaceProps {
   onZoomChange: (newZoom: number) => void;
   onFitToScreen: () => void;
   showGrid: boolean;
+  showPrintGuides?: boolean;
+  onToggleSidebar?: () => void;
+  isSidebarOpenOnMobile?: boolean;
 }
 
 export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
@@ -38,6 +45,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
   selectedElementId,
   onSelectElement,
   onUpdateElement,
+  onAddElement,
   onDeleteElement,
   onDuplicateElement,
   onSelectPage,
@@ -48,17 +56,28 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
   onZoomChange,
   onFitToScreen,
   showGrid,
+  showPrintGuides = false,
+  onToggleSidebar,
+  isSidebarOpenOnMobile,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
+  const boardRef = useRef<HTMLDivElement>(null);
+
   const [pan, setPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
   const [startPan, setStartPan] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   const [isSpacePressed, setIsSpacePressed] = useState(false);
 
-  // Active Drag / Resize / Rotate Interaction State
+  // Multi-touch pinch tracking
+  const [touchPinchDist, setTouchPinchDist] = useState<number | null>(null);
+
+  // Active Pointer Interaction State
   const [interaction, setInteraction] = useState<{
     type: 'move' | 'resize' | 'rotate';
+    elementId: string;
     handle?: HandleType;
+    pointerId: number;
+    targetElem: HTMLElement;
     startX: number;
     startY: number;
     elemStartX: number;
@@ -93,18 +112,27 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
     });
   }, [currentPage.elements]);
 
-  // Spacebar tracking for canvas pan mode
+  // Spacebar & Keyboard Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && !editingTextId && (e.target as HTMLElement).tagName !== 'INPUT' && (e.target as HTMLElement).tagName !== 'TEXTAREA') {
+      if (
+        e.code === 'Space' &&
+        !editingTextId &&
+        (e.target as HTMLElement).tagName !== 'INPUT' &&
+        (e.target as HTMLElement).tagName !== 'TEXTAREA'
+      ) {
         setIsSpacePressed(true);
       }
-      // Delete shortcut
-      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedElementId && !editingTextId && (e.target as HTMLElement).tagName !== 'INPUT' && (e.target as HTMLElement).tagName !== 'TEXTAREA') {
+      if (
+        (e.key === 'Delete' || e.key === 'Backspace') &&
+        selectedElementId &&
+        !editingTextId &&
+        (e.target as HTMLElement).tagName !== 'INPUT' &&
+        (e.target as HTMLElement).tagName !== 'TEXTAREA'
+      ) {
         onDeleteElement(selectedElementId);
       }
-      // Duplicate shortcut Ctrl+D / Cmd+D
-      if ((e.ctrlKey || e.metaKey) && e.key === 'd' && selectedElementId && !editingTextId) {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd' && selectedElementId && !editingTextId) {
         e.preventDefault();
         onDuplicateElement(selectedElementId);
       }
@@ -123,42 +151,88 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
     };
   }, [selectedElementId, editingTextId, onDeleteElement, onDuplicateElement]);
 
-  // Mouse wheel zoom
+  // Mouse wheel zoom or pan
   const handleWheel = (e: React.WheelEvent) => {
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault();
       const delta = e.deltaY > 0 ? -0.05 : 0.05;
       onZoomChange(Math.max(0.15, Math.min(3.0, zoom + delta)));
     } else {
-      // Regular scroll pans the viewport
       setPan((p) => ({ x: p.x - e.deltaX * 0.8, y: p.y - e.deltaY * 0.8 }));
     }
   };
 
-  // Start panning
-  const handleMouseDownViewport = (e: React.MouseEvent) => {
-    if (isSpacePressed || e.button === 1) {
-      // Middle click or Space+click
-      setIsPanning(true);
-      setStartPan({ x: e.clientX - pan.x, y: e.clientY - pan.y });
-    } else if (e.target === containerRef.current || (e.target as HTMLElement).id === 'canvas-board-bg') {
+  // Two-Finger Pinch-to-Zoom for touch screens
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (e.touches.length === 2) {
+      const dist = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+      setTouchPinchDist(dist);
+    }
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (e.touches.length === 2 && touchPinchDist !== null) {
+      const dist = Math.hypot(
+        e.touches[0].clientX - e.touches[1].clientX,
+        e.touches[0].clientY - e.touches[1].clientY
+      );
+      const delta = (dist - touchPinchDist) * 0.005;
+      onZoomChange(Math.max(0.15, Math.min(3.0, zoom + delta)));
+      setTouchPinchDist(dist);
+    }
+  };
+
+  const handleTouchEnd = () => {
+    setTouchPinchDist(null);
+  };
+
+  // Pointer down on canvas background
+  const handlePointerDownViewport = (e: React.PointerEvent) => {
+    if (isSpacePressed || e.button === 1 || e.pointerType === 'touch') {
+      if (
+        e.target === containerRef.current ||
+        (e.target as HTMLElement).id === 'canvas-board-bg'
+      ) {
+        setIsPanning(true);
+        setStartPan({ x: e.clientX - pan.x, y: e.clientY - pan.y });
+        if (e.target === containerRef.current || (e.target as HTMLElement).id === 'canvas-board-bg') {
+          onSelectElement(null);
+          setEditingTextId(null);
+        }
+      }
+    } else if (
+      e.target === containerRef.current ||
+      (e.target as HTMLElement).id === 'canvas-board-bg'
+    ) {
       onSelectElement(null);
       setEditingTextId(null);
     }
   };
 
-  // Start moving element
-  const handleMouseDownElement = (e: React.MouseEvent, el: CanvasElement) => {
+  // Pointer down on element to start dragging
+  const handlePointerDownElement = (e: React.PointerEvent, el: CanvasElement) => {
+    if (e.button !== 0 || isSpacePressed) return;
     e.stopPropagation();
-    if (isSpacePressed) return;
-    if (el.locked) {
-      onSelectElement(el.id);
-      return;
-    }
 
     onSelectElement(el.id);
+
+    if (el.locked) return;
+
+    const target = e.currentTarget as HTMLElement;
+    try {
+      target.setPointerCapture(e.pointerId);
+    } catch {
+      // Touch capture fallback
+    }
+
     setInteraction({
       type: 'move',
+      elementId: el.id,
+      pointerId: e.pointerId,
+      targetElem: target,
       startX: e.clientX,
       startY: e.clientY,
       elemStartX: el.x,
@@ -170,43 +244,38 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
     });
   };
 
-  // Start resizing handle
-  const handleMouseDownHandle = (e: React.MouseEvent, handle: HandleType) => {
+  // Pointer down on handles (resize or rotate)
+  const handlePointerDownHandle = (e: React.PointerEvent, handle: HandleType) => {
+    if (e.button !== 0 || !selectedElement || selectedElement.locked) return;
     e.stopPropagation();
-    if (!selectedElement || selectedElement.locked) return;
 
-    if (handle === 'rotate') {
-      setInteraction({
-        type: 'rotate',
-        handle: 'rotate',
-        startX: e.clientX,
-        startY: e.clientY,
-        elemStartX: selectedElement.x,
-        elemStartY: selectedElement.y,
-        elemStartW: selectedElement.width,
-        elemStartH: selectedElement.height,
-        elemStartRot: selectedElement.rotation || 0,
-        aspectRatio: selectedElement.width / (selectedElement.height || 1),
-      });
-    } else {
-      setInteraction({
-        type: 'resize',
-        handle,
-        startX: e.clientX,
-        startY: e.clientY,
-        elemStartX: selectedElement.x,
-        elemStartY: selectedElement.y,
-        elemStartW: selectedElement.width,
-        elemStartH: selectedElement.height,
-        elemStartRot: selectedElement.rotation || 0,
-        aspectRatio: selectedElement.width / (selectedElement.height || 1),
-      });
+    const target = e.currentTarget as HTMLElement;
+    try {
+      target.setPointerCapture(e.pointerId);
+    } catch {
+      // Touch capture fallback
     }
+
+    setInteraction({
+      type: handle === 'rotate' ? 'rotate' : 'resize',
+      elementId: selectedElement.id,
+      handle,
+      pointerId: e.pointerId,
+      targetElem: target,
+      startX: e.clientX,
+      startY: e.clientY,
+      elemStartX: selectedElement.x,
+      elemStartY: selectedElement.y,
+      elemStartW: selectedElement.width,
+      elemStartH: selectedElement.height,
+      elemStartRot: selectedElement.rotation || 0,
+      aspectRatio: selectedElement.width / (selectedElement.height || 1),
+    });
   };
 
-  // Mouse Move listener during drag / resize / rotate
-  const handleMouseMove = useCallback(
-    (e: MouseEvent) => {
+  // Pointer Move listener during interaction
+  const handlePointerMove = useCallback(
+    (e: PointerEvent) => {
       if (isPanning) {
         setPan({
           x: e.clientX - startPan.x,
@@ -215,7 +284,10 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
         return;
       }
 
-      if (!interaction || !selectedElement) return;
+      if (!interaction) return;
+
+      const targetEl = currentPage.elements.find((item) => item.id === interaction.elementId);
+      if (!targetEl) return;
 
       const dx = (e.clientX - interaction.startX) / zoom;
       const dy = (e.clientY - interaction.startY) / zoom;
@@ -226,14 +298,14 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
 
         // Snap calculation
         const snap = calculateSnapping(
-          { ...selectedElement, x: newX, y: newY },
+          { ...targetEl, x: newX, y: newY },
           currentPage.elements,
           project.width,
           project.height
         );
 
         setActiveGuides(snap.guides);
-        onUpdateElement(selectedElement.id, { x: snap.x, y: snap.y });
+        onUpdateElement(targetEl.id, { x: snap.x, y: snap.y });
       } else if (interaction.type === 'resize' && interaction.handle) {
         let newW = interaction.elemStartW;
         let newH = interaction.elemStartH;
@@ -242,7 +314,6 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
 
         const h = interaction.handle;
 
-        // East / West
         if (h.includes('e')) {
           newW = Math.max(20, interaction.elemStartW + dx);
         } else if (h.includes('w')) {
@@ -252,7 +323,6 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
           newX = interaction.elemStartX + clampedDx;
         }
 
-        // North / South
         if (h.includes('s')) {
           newH = Math.max(20, interaction.elemStartH + dy);
         } else if (h.includes('n')) {
@@ -262,34 +332,31 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
           newY = interaction.elemStartY + clampedDy;
         }
 
-        // Corner proportional lock for images or icons
-        if (selectedElement.type === 'image' || selectedElement.type === 'icon' || selectedElement.type === 'qrcode') {
+        if (targetEl.type === 'image' || targetEl.type === 'icon' || targetEl.type === 'qrcode') {
           if (h === 'se' || h === 'nw' || h === 'ne' || h === 'sw') {
             const ratio = interaction.aspectRatio;
             newH = Math.round(newW / ratio);
           }
         }
 
-        onUpdateElement(selectedElement.id, {
+        onUpdateElement(targetEl.id, {
           x: Math.round(newX),
           y: Math.round(newY),
           width: Math.round(newW),
           height: Math.round(newH),
         });
       } else if (interaction.type === 'rotate') {
-        // Calculate center of element in screen coords
-        const rect = containerRef.current?.getBoundingClientRect();
-        if (!rect) return;
+        const board = boardRef.current;
+        if (!board) return;
+        const rect = board.getBoundingClientRect();
 
-        // Element center relative to viewport
-        const elemCenterX = (project.width / 2 + pan.x) * zoom;
-        const elemCenterY = (project.height / 2 + pan.y) * zoom;
+        const elemCenterX = rect.left + (interaction.elemStartX + interaction.elemStartW / 2) * zoom;
+        const elemCenterY = rect.top + (interaction.elemStartY + interaction.elemStartH / 2) * zoom;
 
         const rad = Math.atan2(e.clientY - elemCenterY, e.clientX - elemCenterX);
         let deg = Math.round((rad * 180) / Math.PI) - 90;
         if (deg < 0) deg += 360;
 
-        // Snapping angle to 0, 45, 90, 180, 270
         const snapAngles = [0, 45, 90, 135, 180, 225, 270, 315, 360];
         for (const snapDeg of snapAngles) {
           if (Math.abs(deg - snapDeg) <= 3) {
@@ -298,26 +365,68 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
           }
         }
 
-        onUpdateElement(selectedElement.id, { rotation: deg });
+        onUpdateElement(targetEl.id, { rotation: deg });
       }
     },
-    [isPanning, startPan, interaction, selectedElement, zoom, pan, project.width, project.height, currentPage.elements, onUpdateElement]
+    [isPanning, startPan, interaction, currentPage.elements, zoom, project.width, project.height, onUpdateElement]
   );
 
-  const handleMouseUp = useCallback(() => {
+  const handlePointerUp = useCallback(() => {
+    if (interaction?.targetElem) {
+      try {
+        if (interaction.targetElem.hasPointerCapture(interaction.pointerId)) {
+          interaction.targetElem.releasePointerCapture(interaction.pointerId);
+        }
+      } catch {
+        // Fallback
+      }
+    }
     setIsPanning(false);
     setInteraction(null);
     setActiveGuides([]);
-  }, []);
+  }, [interaction]);
 
   useEffect(() => {
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', handleMouseUp);
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
     return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
     };
-  }, [handleMouseMove, handleMouseUp]);
+  }, [handlePointerMove, handlePointerUp]);
+
+  // HTML5 Drag & Drop
+  const handleDragOverCanvas = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  };
+
+  const handleDropCanvas = (e: React.DragEvent) => {
+    e.preventDefault();
+    const rawData = e.dataTransfer.getData('application/json');
+    if (!rawData) return;
+
+    try {
+      const elementData = JSON.parse(rawData) as Partial<CanvasElement>;
+      const board = boardRef.current;
+      if (!board) return;
+
+      const rect = board.getBoundingClientRect();
+      const dropX = Math.round((e.clientX - rect.left) / zoom);
+      const dropY = Math.round((e.clientY - rect.top) / zoom);
+
+      const w = elementData.width || 200;
+      const h = elementData.height || 100;
+
+      onAddElement(
+        elementData,
+        Math.max(0, dropX - Math.round(w / 2)),
+        Math.max(0, dropY - Math.round(h / 2))
+      );
+    } catch (err) {
+      console.error('Sidebar drop error:', err);
+    }
+  };
 
   // Render SVG Path for shapes
   const renderShapeSvg = (el: CanvasElement) => {
@@ -461,13 +570,16 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
   const sortedElements = [...currentPage.elements].sort((a, b) => a.zIndex - b.zIndex);
 
   return (
-    <div className="flex-1 flex flex-col h-[calc(100vh-3.5rem-2.75rem)] bg-neutral-200/80 dark:bg-neutral-950 relative overflow-hidden select-none">
-      {/* Central Interactive Infinite Viewport */}
+    <div className="flex-1 flex flex-col h-[calc(100vh-3.5rem-2.75rem)] bg-neutral-200/80 dark:bg-neutral-950 relative overflow-hidden select-none touch-none">
+      {/* Central Viewport */}
       <div
         ref={containerRef}
         onWheel={handleWheel}
-        onMouseDown={handleMouseDownViewport}
-        className={`flex-1 relative overflow-hidden flex items-center justify-center ${
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+        onPointerDown={handlePointerDownViewport}
+        className={`flex-1 relative overflow-hidden flex items-center justify-center touch-none ${
           isSpacePressed ? 'cursor-grab' : isPanning ? 'cursor-grabbing' : 'cursor-default'
         } ${showGrid ? 'canvas-grid-pattern' : ''}`}
       >
@@ -479,11 +591,14 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
             width: project.width,
             height: project.height,
           }}
-          className="relative shrink-0 transition-transform duration-75"
+          className="relative shrink-0 transition-transform duration-75 touch-none"
         >
           {/* Main Canvas Page Surface */}
           <div
+            ref={boardRef}
             id="canvas-board-bg"
+            onDragOver={handleDragOverCanvas}
+            onDrop={handleDropCanvas}
             style={{
               width: project.width,
               height: project.height,
@@ -492,7 +607,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
               backgroundSize: 'cover',
               backgroundPosition: 'center',
             }}
-            className="absolute inset-0 shadow-2xl rounded-xs overflow-hidden select-none"
+            className="absolute inset-0 shadow-2xl rounded-xs overflow-hidden select-none touch-none"
           >
             {/* Render Canvas Elements */}
             {sortedElements.map((el) => {
@@ -500,7 +615,6 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
               const isSelected = el.id === selectedElementId;
               const isEditing = el.id === editingTextId;
 
-              // Image filter string
               const filterStyle = el.filters
                 ? `brightness(${el.filters.brightness}%) contrast(${el.filters.contrast}%) saturate(${el.filters.saturation}%) grayscale(${el.filters.grayscale}%) blur(${el.filters.blur}px) sepia(${el.filters.sepia}%)`
                 : undefined;
@@ -508,7 +622,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
               return (
                 <div
                   key={el.id}
-                  onMouseDown={(e) => handleMouseDownElement(e, el)}
+                  onPointerDown={(e) => handlePointerDownElement(e, el)}
                   onDoubleClick={(e) => {
                     e.stopPropagation();
                     if (el.type === 'text') setEditingTextId(el.id);
@@ -523,8 +637,9 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                     transformOrigin: 'center center',
                     opacity: el.opacity ?? 1,
                     zIndex: el.zIndex,
+                    touchAction: 'none',
                   }}
-                  className={`group select-none ${
+                  className={`group select-none touch-none ${
                     el.locked ? 'cursor-not-allowed' : 'cursor-move'
                   }`}
                 >
@@ -624,70 +739,129 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                   {el.type === 'icon' && (
                     <div
                       style={{ color: el.color || '#4F46E5' }}
-                      className="w-full h-full flex items-center justify-center"
+                      className="w-full h-full flex items-center justify-center font-bold text-lg"
                     >
                       <Sparkles className="w-full h-full" />
                     </div>
                   )}
 
-                  {/* Bounding Box & 8 Handles for Selected Element */}
+                  {/* Touch-optimized Bounding Box & Handles */}
                   {isSelected && (
-                    <div className="absolute -inset-1 border-2 border-indigo-600 pointer-events-none select-none">
-                      {/* Live dimension & position tooltip while interacting */}
-                      {interaction && (
-                        <div className="absolute -top-7 left-1/2 -translate-x-1/2 bg-neutral-900/90 text-white text-[10px] font-mono py-0.5 px-2 rounded-md whitespace-nowrap shadow-md">
-                          {interaction.type === 'rotate'
-                            ? `${el.rotation || 0}°`
-                            : `${Math.round(el.width)} × ${Math.round(el.height)} px`}
-                        </div>
-                      )}
+                    <div className="absolute -inset-1.5 border-2 border-indigo-600 pointer-events-none select-none touch-none">
+                      {/* Floating Quick Touch Toolbar */}
+                      <div className="absolute -top-12 left-1/2 -translate-x-1/2 bg-neutral-900/95 text-white p-1 rounded-xl shadow-xl flex items-center gap-1 z-50 pointer-events-auto border border-neutral-700/80 backdrop-blur-md">
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDuplicateElement(el.id);
+                          }}
+                          title="Duplicate"
+                          className="p-1.5 hover:bg-neutral-800 rounded-lg text-neutral-200"
+                        >
+                          <Copy className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onUpdateElement(el.id, { rotation: ((el.rotation || 0) + 90) % 360 });
+                          }}
+                          title="Rotate 90°"
+                          className="p-1.5 hover:bg-neutral-800 rounded-lg text-neutral-200"
+                        >
+                          <RotateCw className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onUpdateElement(el.id, { locked: !el.locked });
+                          }}
+                          title={el.locked ? 'Unlock' : 'Lock'}
+                          className="p-1.5 hover:bg-neutral-800 rounded-lg text-neutral-200"
+                        >
+                          {el.locked ? <Lock className="w-4 h-4 text-amber-400" /> : <Unlock className="w-4 h-4" />}
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            onDeleteElement(el.id);
+                          }}
+                          title="Delete"
+                          className="p-1.5 hover:bg-red-600/80 rounded-lg text-neutral-200"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
 
-                      {/* Rotation Knob at Top */}
+                      {/* Large Touch Rotation Knob */}
                       {!el.locked && (
                         <div
-                          onMouseDown={(e) => handleMouseDownHandle(e, 'rotate')}
-                          title="Rotate (Drag)"
-                          className="absolute -top-7 left-1/2 -translate-x-1/2 w-5 h-5 bg-white border border-indigo-600 rounded-full flex items-center justify-center cursor-grab pointer-events-auto shadow-sm hover:scale-110 transition-transform"
+                          onPointerDown={(e) => handlePointerDownHandle(e, 'rotate')}
+                          title="Rotate"
+                          className="absolute -top-22 left-1/2 -translate-x-1/2 w-9 h-9 min-w-[36px] min-h-[36px] bg-white border-2 border-indigo-600 rounded-full flex items-center justify-center cursor-grab pointer-events-auto shadow-md hover:scale-110 transition-transform active:scale-95"
                         >
-                          <RotateCw className="w-3 h-3 text-indigo-600" />
+                          <RotateCw className="w-4 h-4 text-indigo-600" />
                         </div>
                       )}
 
-                      {/* 8 Resize Handles */}
+                      {/* 8 Touch-friendly 32px hit area Resize Handles */}
                       {!el.locked && (
                         <>
+                          {/* NW */}
                           <div
-                            onMouseDown={(e) => handleMouseDownHandle(e, 'nw')}
-                            className="absolute -top-1.5 -left-1.5 w-3 h-3 bg-white border-2 border-indigo-600 rounded-xs cursor-nwse-resize pointer-events-auto"
-                          />
+                            onPointerDown={(e) => handlePointerDownHandle(e, 'nw')}
+                            className="absolute -top-4 -left-4 w-8 h-8 min-w-[32px] min-h-[32px] flex items-center justify-center cursor-nwse-resize pointer-events-auto"
+                          >
+                            <div className="w-3.5 h-3.5 bg-white border-2 border-indigo-600 rounded-full shadow-xs" />
+                          </div>
+                          {/* N */}
                           <div
-                            onMouseDown={(e) => handleMouseDownHandle(e, 'n')}
-                            className="absolute -top-1.5 left-1/2 -translate-x-1/2 w-4 h-2 bg-white border border-indigo-600 rounded-xs cursor-ns-resize pointer-events-auto"
-                          />
+                            onPointerDown={(e) => handlePointerDownHandle(e, 'n')}
+                            className="absolute -top-4 left-1/2 -translate-x-1/2 w-8 h-8 min-w-[32px] min-h-[32px] flex items-center justify-center cursor-ns-resize pointer-events-auto"
+                          >
+                            <div className="w-5 h-2 bg-white border border-indigo-600 rounded-xs shadow-xs" />
+                          </div>
+                          {/* NE */}
                           <div
-                            onMouseDown={(e) => handleMouseDownHandle(e, 'ne')}
-                            className="absolute -top-1.5 -right-1.5 w-3 h-3 bg-white border-2 border-indigo-600 rounded-xs cursor-nesw-resize pointer-events-auto"
-                          />
+                            onPointerDown={(e) => handlePointerDownHandle(e, 'ne')}
+                            className="absolute -top-4 -right-4 w-8 h-8 min-w-[32px] min-h-[32px] flex items-center justify-center cursor-nesw-resize pointer-events-auto"
+                          >
+                            <div className="w-3.5 h-3.5 bg-white border-2 border-indigo-600 rounded-full shadow-xs" />
+                          </div>
+                          {/* E */}
                           <div
-                            onMouseDown={(e) => handleMouseDownHandle(e, 'e')}
-                            className="absolute top-1/2 -right-1.5 -translate-y-1/2 w-2 h-4 bg-white border border-indigo-600 rounded-xs cursor-ew-resize pointer-events-auto"
-                          />
+                            onPointerDown={(e) => handlePointerDownHandle(e, 'e')}
+                            className="absolute top-1/2 -right-4 -translate-y-1/2 w-8 h-8 min-w-[32px] min-h-[32px] flex items-center justify-center cursor-ew-resize pointer-events-auto"
+                          >
+                            <div className="w-2 h-5 bg-white border border-indigo-600 rounded-xs shadow-xs" />
+                          </div>
+                          {/* SE */}
                           <div
-                            onMouseDown={(e) => handleMouseDownHandle(e, 'se')}
-                            className="absolute -bottom-1.5 -right-1.5 w-3 h-3 bg-white border-2 border-indigo-600 rounded-xs cursor-nwse-resize pointer-events-auto"
-                          />
+                            onPointerDown={(e) => handlePointerDownHandle(e, 'se')}
+                            className="absolute -bottom-4 -right-4 w-8 h-8 min-w-[32px] min-h-[32px] flex items-center justify-center cursor-nwse-resize pointer-events-auto"
+                          >
+                            <div className="w-3.5 h-3.5 bg-white border-2 border-indigo-600 rounded-full shadow-xs" />
+                          </div>
+                          {/* S */}
                           <div
-                            onMouseDown={(e) => handleMouseDownHandle(e, 's')}
-                            className="absolute -bottom-1.5 left-1/2 -translate-x-1/2 w-4 h-2 bg-white border border-indigo-600 rounded-xs cursor-ns-resize pointer-events-auto"
-                          />
+                            onPointerDown={(e) => handlePointerDownHandle(e, 's')}
+                            className="absolute -bottom-4 left-1/2 -translate-x-1/2 w-8 h-8 min-w-[32px] min-h-[32px] flex items-center justify-center cursor-ns-resize pointer-events-auto"
+                          >
+                            <div className="w-5 h-2 bg-white border border-indigo-600 rounded-xs shadow-xs" />
+                          </div>
+                          {/* SW */}
                           <div
-                            onMouseDown={(e) => handleMouseDownHandle(e, 'sw')}
-                            className="absolute -bottom-1.5 -left-1.5 w-3 h-3 bg-white border-2 border-indigo-600 rounded-xs cursor-nesw-resize pointer-events-auto"
-                          />
+                            onPointerDown={(e) => handlePointerDownHandle(e, 'sw')}
+                            className="absolute -bottom-4 -left-4 w-8 h-8 min-w-[32px] min-h-[32px] flex items-center justify-center cursor-nesw-resize pointer-events-auto"
+                          >
+                            <div className="w-3.5 h-3.5 bg-white border-2 border-indigo-600 rounded-full shadow-xs" />
+                          </div>
+                          {/* W */}
                           <div
-                            onMouseDown={(e) => handleMouseDownHandle(e, 'w')}
-                            className="absolute top-1/2 -left-1.5 -translate-y-1/2 w-2 h-4 bg-white border border-indigo-600 rounded-xs cursor-ew-resize pointer-events-auto"
-                          />
+                            onPointerDown={(e) => handlePointerDownHandle(e, 'w')}
+                            className="absolute top-1/2 -left-4 -translate-y-1/2 w-8 h-8 min-w-[32px] min-h-[32px] flex items-center justify-center cursor-ew-resize pointer-events-auto"
+                          >
+                            <div className="w-2 h-5 bg-white border border-indigo-600 rounded-xs shadow-xs" />
+                          </div>
                         </>
                       )}
                     </div>
@@ -716,25 +890,95 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
                 );
               }
             })}
+
+            {/* Print & Fold Guide Overlays for Brochures and Postcards */}
+            {showPrintGuides && (
+              <div className="absolute inset-0 pointer-events-none z-40">
+                {/* Print Bleed Border (12px outer inset) */}
+                <div
+                  style={{ top: '12px', bottom: '12px', left: '12px', right: '12px' }}
+                  className="absolute border border-dashed border-red-500/70"
+                >
+                  <span className="absolute top-1 left-2 text-[9px] font-mono text-red-500 font-bold bg-white/80 dark:bg-black/80 px-1 rounded-xs">
+                    TRIM / BLEED LINE
+                  </span>
+                </div>
+
+                {/* Print Safety Zone Border (28px inner inset) */}
+                <div
+                  style={{ top: '28px', bottom: '28px', left: '28px', right: '28px' }}
+                  className="absolute border border-dashed border-cyan-500/70"
+                >
+                  <span className="absolute bottom-1 right-2 text-[9px] font-mono text-cyan-600 font-bold bg-white/80 dark:bg-black/80 px-1 rounded-xs">
+                    SAFE PRINT MARGIN
+                  </span>
+                </div>
+
+                {/* Tri-Fold Brochure Fold Lines (3 panels) */}
+                {project.width >= 2000 && project.width > project.height && (
+                  <>
+                    <div
+                      style={{ left: `${Math.round(project.width / 3)}px` }}
+                      className="absolute top-0 bottom-0 border-r-2 border-dashed border-indigo-500/80"
+                    >
+                      <span className="absolute top-2 -translate-x-1/2 text-[10px] font-bold font-mono text-indigo-600 bg-white/90 dark:bg-neutral-900/90 px-2 py-0.5 rounded-md shadow-xs">
+                        FOLD 1 (LEFT FLAP)
+                      </span>
+                    </div>
+                    <div
+                      style={{ left: `${Math.round((2 * project.width) / 3)}px` }}
+                      className="absolute top-0 bottom-0 border-r-2 border-dashed border-indigo-500/80"
+                    >
+                      <span className="absolute top-2 -translate-x-1/2 text-[10px] font-bold font-mono text-indigo-600 bg-white/90 dark:bg-neutral-900/90 px-2 py-0.5 rounded-md shadow-xs">
+                        FOLD 2 (RIGHT COVER)
+                      </span>
+                    </div>
+                  </>
+                )}
+
+                {/* Bi-Fold Brochure Fold Line (50% Center) */}
+                {project.width < 2000 && project.width > project.height * 1.1 && (
+                  <div
+                    style={{ left: `${Math.round(project.width / 2)}px` }}
+                    className="absolute top-0 bottom-0 border-r-2 border-dashed border-indigo-500/80"
+                  >
+                    <span className="absolute top-2 -translate-x-1/2 text-[10px] font-bold font-mono text-indigo-600 bg-white/90 dark:bg-neutral-900/90 px-2 py-0.5 rounded-md shadow-xs">
+                      CENTER FOLD
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>
 
       {/* Bottom Multi-Page Strip & Canvas Controls */}
-      <footer className="h-11 bg-white dark:bg-neutral-900 border-t border-neutral-200 dark:border-neutral-800 px-4 flex items-center justify-between z-30 shrink-0 text-xs select-none">
-        {/* Left: Multi-page navigation */}
+      <footer className="h-12 bg-white dark:bg-neutral-900 border-t border-neutral-200 dark:border-neutral-800 px-4 flex items-center justify-between z-30 shrink-0 text-xs select-none">
+        {/* Mobile Sidebar Toggle Button */}
+        {onToggleSidebar && (
+          <button
+            onClick={onToggleSidebar}
+            className="lg:hidden flex items-center gap-1.5 px-3 py-1.5 min-h-[36px] bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 font-semibold rounded-xl border border-indigo-200 dark:border-indigo-800"
+          >
+            <SlidersHorizontal className="w-4 h-4" />
+            <span>{isSidebarOpenOnMobile ? 'Close Library' : 'Design Tools'}</span>
+          </button>
+        )}
+
+        {/* Multi-page navigation */}
         <div className="flex items-center gap-2">
-          <div className="flex items-center gap-1 bg-neutral-100 dark:bg-neutral-800 p-0.5 rounded-lg">
+          <div className="flex items-center gap-1 bg-neutral-100 dark:bg-neutral-800 p-0.5 rounded-xl">
             <button
               onClick={() => onSelectPage(Math.max(0, project.currentPageIndex - 1))}
               disabled={project.currentPageIndex === 0}
               title="Previous Page"
-              className="p-1 text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 disabled:opacity-30 rounded-md"
+              className="p-2 min-w-[36px] min-h-[36px] flex items-center justify-center text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 disabled:opacity-30 rounded-lg cursor-pointer"
             >
-              <ChevronLeft className="w-3.5 h-3.5" />
+              <ChevronLeft className="w-4 h-4" />
             </button>
             <span className="px-2 text-xs font-semibold text-neutral-800 dark:text-neutral-200">
-              Page {project.currentPageIndex + 1} of {project.pages.length}
+              {project.currentPageIndex + 1} / {project.pages.length}
             </span>
             <button
               onClick={() =>
@@ -742,53 +986,22 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
               }
               disabled={project.currentPageIndex === project.pages.length - 1}
               title="Next Page"
-              className="p-1 text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 disabled:opacity-30 rounded-md"
+              className="p-2 min-w-[36px] min-h-[36px] flex items-center justify-center text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 disabled:opacity-30 rounded-lg cursor-pointer"
             >
-              <ChevronRight className="w-3.5 h-3.5" />
+              <ChevronRight className="w-4 h-4" />
             </button>
           </div>
 
           <button
             onClick={onAddPage}
-            className="flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-lg transition-colors border border-neutral-200 dark:border-neutral-800"
+            className="flex items-center gap-1 px-3 py-1.5 min-h-[36px] text-xs font-medium text-neutral-700 dark:text-neutral-300 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-xl transition-colors border border-neutral-200 dark:border-neutral-800 cursor-pointer"
           >
-            <Plus className="w-3.5 h-3.5 text-indigo-600" />
-            <span>Add Page</span>
+            <Plus className="w-4 h-4 text-indigo-600" />
+            <span className="hidden sm:inline">Add Page</span>
           </button>
-
-          <button
-            onClick={() => onDuplicatePage(project.currentPageIndex)}
-            title="Duplicate Current Page"
-            className="p-1.5 text-neutral-600 dark:text-neutral-400 hover:text-neutral-900 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-lg transition-colors"
-          >
-            <Copy className="w-3.5 h-3.5" />
-          </button>
-
-          {project.pages.length > 1 && (
-            <button
-              onClick={() => onDeletePage(project.currentPageIndex)}
-              title="Delete Page"
-              className="p-1.5 text-neutral-400 hover:text-red-500 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-lg transition-colors"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-            </button>
-          )}
         </div>
 
-        {/* Center: Hint for spacebar pan */}
-        <div className="hidden md:flex items-center gap-1.5 text-[11px] text-neutral-400">
-          <span>Hold</span>
-          <kbd className="px-1.5 py-0.5 bg-neutral-100 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded text-[10px] font-mono text-neutral-600 dark:text-neutral-400">
-            Space
-          </kbd>
-          <span>to pan · Scroll with</span>
-          <kbd className="px-1.5 py-0.5 bg-neutral-100 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded text-[10px] font-mono text-neutral-600 dark:text-neutral-400">
-            Ctrl
-          </kbd>
-          <span>to zoom</span>
-        </div>
-
-        {/* Right: Zoom slider */}
+        {/* Zoom slider */}
         <div className="flex items-center gap-2">
           <input
             type="range"
@@ -796,7 +1009,7 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
             max="250"
             value={Math.round(zoom * 100)}
             onChange={(e) => onZoomChange(parseInt(e.target.value) / 100)}
-            className="w-24 accent-indigo-600"
+            className="w-20 sm:w-28 h-6 accent-indigo-600 cursor-pointer"
           />
           <span className="text-xs font-mono text-neutral-600 dark:text-neutral-400 min-w-[36px] text-right">
             {Math.round(zoom * 100)}%
@@ -804,9 +1017,9 @@ export const CanvasWorkspace: React.FC<CanvasWorkspaceProps> = ({
           <button
             onClick={onFitToScreen}
             title="Fit to Screen"
-            className="p-1 text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-md"
+            className="p-2 min-w-[36px] min-h-[36px] flex items-center justify-center text-neutral-500 hover:text-neutral-900 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 rounded-xl cursor-pointer"
           >
-            <Maximize className="w-3.5 h-3.5" />
+            <Maximize className="w-4 h-4" />
           </button>
         </div>
       </footer>

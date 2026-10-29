@@ -408,3 +408,25 @@ export function exportProjectJson(project: CanvasProject) {
   triggerDownload(url, `${project.title.toLowerCase().replace(/\s+/g, '-')}-project.json`);
   URL.revokeObjectURL(url);
 }
+
+// Import project from uploaded JSON file
+export function importProjectFromFile(file: File): Promise<CanvasProject> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const text = e.target?.result as string;
+        const parsed = JSON.parse(text) as CanvasProject;
+        if (parsed && Array.isArray(parsed.pages) && parsed.pages.length > 0) {
+          resolve(parsed);
+        } else {
+          reject(new Error('Invalid design file structure. Must contain page layers.'));
+        }
+      } catch (err) {
+        reject(new Error('Corrupted JSON file. Could not parse project data.'));
+      }
+    };
+    reader.onerror = () => reject(new Error('Failed to read project file'));
+    reader.readAsText(file);
+  });
+}

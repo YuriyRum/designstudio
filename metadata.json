@@ -2,5 +2,5 @@
   "name": "CanvasCraft - Graphic Design & Studio",
   "description": "Intuitive drag-and-drop graphic design studio to create stunning visual graphics, posters, flyers, and multi-page documents with PDF, PNG, and JPEG export.",
   "requestFramePermissions": [],
-  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+  "majorCapabilities": []
 }
